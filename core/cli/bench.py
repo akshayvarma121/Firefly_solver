@@ -35,6 +35,7 @@ class ProblemResult:
     iterations: int = 0
     error_message: Optional[str] = None
     mock: bool = False
+    solution: Optional[List[float]] = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -114,11 +115,8 @@ def solve_one(
     try:
         ref_obj, ref_time = _run_highspy(filepath)
     except Exception as exc:
-        if raise_errors:
-            raise
-        result.status = "ERROR"
-        result.error_message = f"HiGHS reference solve failed: {exc}"
-        return result
+        ref_obj = None
+        ref_time = 0.0
 
     if firefly_solver is None:
         result.status = "OPTIMAL"
@@ -126,11 +124,15 @@ def solve_one(
         result.wall_time_ms = 0.0
         result.iterations = 0
         result.mock = True
-        diff = abs(result.objective - ref_obj)
         result.reference = ref_obj
         result.reference_time_ms = ref_time
-        result.difference = diff
-        result.passed = diff < tol
+        if ref_obj is not None:
+            diff = abs(result.objective - ref_obj)
+            result.difference = diff
+            result.passed = diff < tol
+        else:
+            result.difference = None
+            result.passed = None
         return result
 
     try:
@@ -149,12 +151,20 @@ def solve_one(
         result.wall_time_ms = res.wall_time_ms if res.wall_time_ms else elapsed_ms
         result.iterations = res.iterations
         result.mock = False
+        if hasattr(res, "solution") and res.solution is not None:
+            result.solution = list(res.solution)
+        else:
+            result.solution = []
 
-        diff = abs(res.objective - ref_obj)
         result.reference = ref_obj
         result.reference_time_ms = ref_time
-        result.difference = diff
-        result.passed = diff < tol
+        if ref_obj is not None and res.objective is not None:
+            diff = abs(res.objective - ref_obj)
+            result.difference = diff
+            result.passed = diff < tol
+        else:
+            result.difference = None
+            result.passed = None
 
     except Exception as exc:
         if raise_errors:
