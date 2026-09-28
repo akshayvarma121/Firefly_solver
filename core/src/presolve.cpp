@@ -64,6 +64,13 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
     std::vector<double> col_upper = orig.col_upper_bounds;
     std::vector<double> obj = orig.objective;
     
+    auto count_active = [&]() {
+        int ar = 0, ac = 0;
+        for(bool b : active_row) if(b) ar++;
+        for(bool b : active_col) if(b) ac++;
+        return std::make_pair(ar, ac);
+    };
+
     bool changed = true;
     size_t presolve_iters = 0;
     while (changed) {
@@ -72,6 +79,9 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
             throw std::runtime_error("Presolve infinite loop");
         }
         changed = false;
+
+        auto before_fixed = count_active();
+
 
         // 1. Fixed variables substitution
         for (size_t j = 0; j < num_cols; ++j) {
@@ -108,7 +118,11 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
                 col_nz[j].clear();
             }
         }
+        auto after_fixed = count_active();
+        std::cout << "[DEBUG] Fixed variables substitution: BEFORE (" << before_fixed.first << " rows, " << before_fixed.second << " cols) -> AFTER (" << after_fixed.first << " rows, " << after_fixed.second << " cols)\n";
         
+        auto before_empty_single = count_active();
+
         // 2. Empty rows and Single-variable rows
         for (size_t i = 0; i < num_rows; ++i) {
             if (!active_row[i]) continue;
@@ -169,6 +183,10 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
                 row_nz[i].clear();
             }
         }
+        auto after_empty_single = count_active();
+        std::cout << "[DEBUG] Empty/Single-variable rows: BEFORE (" << before_empty_single.first << " rows, " << before_empty_single.second << " cols) -> AFTER (" << after_empty_single.first << " rows, " << after_empty_single.second << " cols)\n";
+        
+        auto before_empty_vars = count_active();
         
         // 3. Remove empty variables
         for (size_t j = 0; j < num_cols; ++j) {
@@ -203,7 +221,11 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
                 }
             }
         }
+        auto after_empty_vars = count_active();
+        std::cout << "[DEBUG] Remove empty variables: BEFORE (" << before_empty_vars.first << " rows, " << before_empty_vars.second << " cols) -> AFTER (" << after_empty_vars.first << " rows, " << after_empty_vars.second << " cols)\n";
     }
+    
+    auto before_scaling = count_active();
     
     // Coefficient Scaling (Equilibration)
     std::vector<double> r_scale(num_rows, 1.0);
@@ -269,6 +291,8 @@ PresolvedProblem Presolver::presolve(const Problem& orig, const PresolveOptions&
         }
     }
     }
+    auto after_scaling = count_active();
+    std::cout << "[DEBUG] Coefficient Scaling: BEFORE (" << before_scaling.first << " rows, " << before_scaling.second << " cols) -> AFTER (" << after_scaling.first << " rows, " << after_scaling.second << " cols)\n";
     
     // Build Reduced Problem
     Problem reduced;

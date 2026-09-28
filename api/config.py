@@ -3,7 +3,13 @@ from typing import List
 
 class Settings(BaseSettings):
     # Default to local frontend dev server if not specified
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost"
+    ]
     
     # Defaults to 50MB
     MAX_UPLOAD_SIZE_BYTES: int = 50 * 1024 * 1024

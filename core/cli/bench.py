@@ -28,6 +28,7 @@ class ProblemResult:
     solver_used: Optional[str] = None     # Which engine produced the result
     objective: Optional[float] = None
     reference: Optional[float] = None     # known-good value if provided
+    reference_time_ms: float = 0.0        # time taken by HiGHS
     difference: Optional[float] = None    # abs(objective - reference)
     passed: Optional[bool] = None         # difference < tol
     wall_time_ms: float = 0.0
@@ -66,12 +67,26 @@ def collect_mps_files(folder: str) -> List[str]:
     return [os.path.join(folder, n) for n in names if n.lower().endswith(".mps")]
 
 
+def _run_highspy(filepath: str) -> tuple[float, float]:
+    import highspy
+    import time
+    
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.readModel(filepath)
+    
+    t0 = time.perf_counter()
+    h.run()
+    wall_ms = (time.perf_counter() - t0) * 1000.0
+    
+    info = h.getInfo()
+    return info.objective_function_value, wall_ms
+
 def solve_one(
     filepath: str,
     *,
     method: str = "auto",
     gpu: bool = True,
-    reference: Optional[float] = None,
     tol: float = 1e-5,
     iteration_callback: Optional[Callable] = None,
     firefly_solver=None,
@@ -95,6 +110,15 @@ def solve_one(
     """
     basename = os.path.basename(filepath)
     result = ProblemResult(problem=basename, path=filepath, status="ERROR")
+    
+    try:
+        ref_obj, ref_time = _run_highspy(filepath)
+    except Exception as exc:
+        if raise_errors:
+            raise
+        result.status = "ERROR"
+        result.error_message = f"HiGHS reference solve failed: {exc}"
+        return result
 
     if firefly_solver is None:
         result.status = "OPTIMAL"
@@ -102,11 +126,11 @@ def solve_one(
         result.wall_time_ms = 0.0
         result.iterations = 0
         result.mock = True
-        if reference is not None:
-            diff = abs(result.objective - reference)
-            result.reference = reference
-            result.difference = diff
-            result.passed = diff < tol
+        diff = abs(result.objective - ref_obj)
+        result.reference = ref_obj
+        result.reference_time_ms = ref_time
+        result.difference = diff
+        result.passed = diff < tol
         return result
 
     try:
@@ -126,11 +150,11 @@ def solve_one(
         result.iterations = res.iterations
         result.mock = False
 
-        if reference is not None:
-            diff = abs(res.objective - reference)
-            result.reference = reference
-            result.difference = diff
-            result.passed = diff < tol
+        diff = abs(res.objective - ref_obj)
+        result.reference = ref_obj
+        result.reference_time_ms = ref_time
+        result.difference = diff
+        result.passed = diff < tol
 
     except Exception as exc:
         if raise_errors:
@@ -146,7 +170,6 @@ def run_batch(
     *,
     method: str = "auto",
     gpu: bool = True,
-    references: Optional[Dict[str, float]] = None,
     tol: float = 1e-5,
     on_result: Optional[Callable[[ProblemResult], None]] = None,
     firefly_solver=None,
@@ -161,19 +184,14 @@ def run_batch(
     on_result   : optional callback called after each file finishes
     firefly_solver : injected module handle (see solve_one)
     """
-    refs = references or {}
     files = collect_mps_files(folder)
     summary = BatchSummary(total=len(files))
 
     for fpath in files:
-        basename = os.path.basename(fpath)
-        ref = refs.get(basename)
-
         pr = solve_one(
             fpath,
             method=method,
             gpu=gpu,
-            reference=ref,
             tol=tol,
             firefly_solver=firefly_solver,
         )

@@ -43,12 +43,15 @@ if os.name == 'nt':
     except Exception:
         pass
 
+_USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR") and "--no-color" not in sys.argv
+
 class Theme:
-    PRIMARY = "\x1b[38;2;232;230;222m"
-    MUTED   = "\x1b[38;2;140;139;128m"
-    ACCENT  = "\x1b[38;2;232;163;61m"
-    SECOND  = "\x1b[38;2;107;143;113m"
-    RESET   = "\x1b[0m"
+    PRIMARY = "\x1b[38;2;232;230;222m" if _USE_COLOR else ""
+    MUTED   = "\x1b[38;2;140;139;128m" if _USE_COLOR else ""
+    ACCENT  = "\x1b[38;2;232;163;61m" if _USE_COLOR else ""
+    SECOND  = "\x1b[38;2;107;143;113m" if _USE_COLOR else ""
+    ERROR   = "\x1b[31m" if _USE_COLOR else ""
+    RESET   = "\x1b[0m" if _USE_COLOR else ""
 
 # ---------------------------------------------------------------------------
 # Windows: add CUDA DLL directories before importing the native extension.
@@ -159,7 +162,7 @@ def _print_summary(result, filepath: str, quiet: bool, verbose: bool) -> None:
     print(f"  {Theme.MUTED}Problem   :{Theme.RESET} {Theme.PRIMARY}{os.path.basename(filepath)}{Theme.RESET}")
     print(f"  {Theme.MUTED}Status    :{Theme.RESET} {Theme.ACCENT}{result.status}{mock_tag}{Theme.RESET}")
     if result.status == "ERROR" and getattr(result, "error_message", None):
-        print(f"  {Theme.MUTED}Error     :{Theme.RESET} \x1b[31m{result.error_message}{Theme.RESET}")
+        print(f"  {Theme.MUTED}Error     :{Theme.RESET} {Theme.ERROR}{result.error_message}{Theme.RESET}")
     if result.objective is not None:
         print(f"  {Theme.MUTED}Objective :{Theme.RESET} {Theme.SECOND}{result.objective:.10g}{Theme.RESET}")
     print(f"  {Theme.MUTED}Time      :{Theme.RESET} {Theme.PRIMARY}{result.wall_time_ms:.1f} ms{Theme.RESET}")
@@ -728,6 +731,12 @@ Examples
   firefly test (Developer Only)
 """,
     )
+    
+    root.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
+    )
 
     sub = root.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
@@ -993,6 +1002,10 @@ def _print_homepage() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Strip --no-color from argv so argparse doesn't complain if it's passed after a sub-command
+    while "--no-color" in sys.argv:
+        sys.argv.remove("--no-color")
+
     # Auto-cleanup: if there's a leftover .old file from a previous update, delete it
     try:
         exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
@@ -1030,7 +1043,7 @@ def main() -> None:
                 sys.argv.extend(["solve", user_input])
                 break
             else:
-                print(f"  \x1b[31m[Error] File not found: {user_input}{Theme.RESET}")
+                print(f"  {Theme.ERROR}[Error] File not found: {user_input}{Theme.RESET}")
         
         if not interactive_mode:
             _print_homepage()

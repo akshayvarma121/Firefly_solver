@@ -58,7 +58,7 @@ export function GPULaneIndicators({ state, lanes = 8 }: GPULaneIndicatorsProps) 
   }, [state, lanes]);
 
   return (
-    <div className="flex items-center gap-[2px] p-1 border border-border bg-background">
+    <div className="flex items-center gap-0.5 p-1 border border-border bg-background">
       {activeLanes.map((isActive, i) => (
         <div
           key={i}

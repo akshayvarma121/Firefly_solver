@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/layout.tsx","./src/components/solverstatus.tsx","./src/context/solvercontext.tsx","./src/lib/utils.ts","./src/pages/architecture.tsx","./src/pages/benchmarks.tsx","./src/pages/solve.tsx"],"version":"6.0.3"}

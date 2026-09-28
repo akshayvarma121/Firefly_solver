@@ -5,3 +5,4 @@ websockets
 python-multipart
 pydantic-settings
 requests
+highspy

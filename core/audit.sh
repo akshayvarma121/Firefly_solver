@@ -335,6 +335,11 @@ run_test "Windows CUDA_PATH DLL directory resolution" "
 if [ -f \"\$TEST_VENV_DIR/Scripts/activate\" ]; then source \"\$TEST_VENV_DIR/Scripts/activate\"; else source \"\$TEST_VENV_DIR/bin/activate\"; fi
 python ../api/test_bindings.py --test \"[WIN]\""
 
+add_section "JSON Problem Definitions"
+run_test "JSON payloads (Problem 1 & 2) and validation errors" "
+if [ -f \"\$TEST_VENV_DIR/Scripts/activate\" ]; then source \"\$TEST_VENV_DIR/Scripts/activate\"; else source \"\$TEST_VENV_DIR/bin/activate\"; fi
+python ../api/test_bindings.py --test \"[JSON]\""
+
 add_section "CLI"
 CLI_VENV_CMD="
 if [ -f \"\$TEST_VENV_DIR/Scripts/activate\" ]; then

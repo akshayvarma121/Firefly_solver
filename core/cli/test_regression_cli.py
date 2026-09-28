@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -235,7 +236,9 @@ def run_all() -> tuple[int, int]:
                 else:
                     try:
                         # "  Objective : <value>"
-                        obj_val = float(obj_line.split(":")[-1].strip())
+                        raw_val = obj_line.split(":")[-1]
+                        clean_val = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw_val).strip()
+                        obj_val = float(clean_val)
                         if not math.isclose(obj_val, case.expect_obj,
                                             abs_tol=case.obj_tol,
                                             rel_tol=1e-5):

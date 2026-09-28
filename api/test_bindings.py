@@ -211,6 +211,100 @@ def test_parse_mps_string():
     print(f"  PASS  parse_mps_string roundtrip  vars={p_str.num_vars}")
 
 
+def test_json_payload_problem1():
+    """
+    Regression test for JSON payload conversion (similar to Problem 1: 1 var, 2 constrs).
+    min x
+    s.t. x <= 10
+         x <= 20
+    Optimal: x=0, obj=0.0
+    """
+    p = firefly_solver.SparseProblem()
+    p.num_vars = 1
+    p.num_constrs = 2
+    p.obj_coeffs = [-1.0]
+    p.row_ptr = [0, 1, 2]
+    p.col_idx = [0, 0]
+    p.values = [1.0, 1.0]
+    p.row_senses = ['L', 'L']
+    p.rhs = [10.0, 20.0]
+    p.var_lower_bounds = [0.0]
+    p.var_upper_bounds = [] # not provided, should default to INF
+    
+    res = firefly_solver.solve(p, method="simplex", gpu=False)
+    assert res.status == "OPTIMAL"
+    assert abs(res.objective - (-10.0)) < 1e-4, f"Expected -10.0, got {res.objective}"
+    assert abs(res.solution[0] - 10.0) < 1e-4
+    print(f"  PASS  JSON Problem 1  obj={res.objective}")
+
+
+def test_json_payload_problem2():
+    """
+    Regression test for JSON payload conversion (Problem 2).
+    min -x - 2y
+    s.t. x + y <= 10
+    Optimal: x=0, y=10, obj=-20.0
+    """
+    p = firefly_solver.SparseProblem()
+    p.num_vars = 2
+    p.num_constrs = 1
+    p.obj_coeffs = [-1.0, -2.0]
+    p.row_ptr = [0, 2]
+    p.col_idx = [0, 1]
+    p.values = [1.0, 1.0]
+    p.row_senses = ['L']
+    p.rhs = [10.0]
+    
+    res = firefly_solver.solve(p, method="simplex", gpu=False)
+    assert res.status == "OPTIMAL"
+    assert abs(res.objective - (-20.0)) < 1e-4, f"Expected -20.0, got {res.objective}"
+    assert abs(res.solution[0] - 0.0) < 1e-4
+    assert abs(res.solution[1] - 10.0) < 1e-4
+    print(f"  PASS  JSON Problem 2  obj={res.objective}")
+
+
+def test_json_validation_errors():
+    """
+    Test that invalid JSON fields (wrong size or invalid senses) raise exceptions,
+    preventing silent defaults that make variables look fixed or constraints redundant.
+    """
+    # 1. Invalid Sense
+    p1 = firefly_solver.SparseProblem()
+    p1.num_vars = 1
+    p1.num_constrs = 1
+    p1.obj_coeffs = [1.0]
+    p1.row_ptr = [0, 1]
+    p1.col_idx = [0]
+    p1.values = [1.0]
+    p1.row_senses = ['<'] # Invalid sense
+    p1.rhs = [10.0]
+    
+    try:
+        firefly_solver.solve(p1, method="simplex", gpu=False)
+        assert False, "Expected ValueError/RuntimeError for invalid sense"
+    except (ValueError, RuntimeError, Exception) as e:
+        assert "Unknown row sense" in str(e)
+        
+    # 2. Missing RHS
+    p2 = firefly_solver.SparseProblem()
+    p2.num_vars = 1
+    p2.num_constrs = 2
+    p2.obj_coeffs = [1.0]
+    p2.row_ptr = [0, 1, 2]
+    p2.col_idx = [0, 0]
+    p2.values = [1.0, 1.0]
+    p2.row_senses = ['L', 'L']
+    p2.rhs = [10.0] # Missing one!
+    
+    try:
+        firefly_solver.solve(p2, method="simplex", gpu=False)
+        assert False, "Expected ValueError/RuntimeError for mismatched rhs size"
+    except (ValueError, RuntimeError, Exception) as e:
+        assert "size does not match" in str(e)
+
+    print("  PASS  JSON validation errors caught successfully")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.  GIL stress: real-work callback over many repeated solve() calls
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -493,6 +587,9 @@ _TESTS = [
     ("[API] parse_mps LP",                  test_parse_mps_lp),
     ("[API] parse_mps MILP",                test_parse_mps_milp),
     ("[API] parse_mps_string roundtrip",    test_parse_mps_string),
+    ("[JSON] JSON Problem 1 payload",       test_json_payload_problem1),
+    ("[JSON] JSON Problem 2 payload",       test_json_payload_problem2),
+    ("[JSON] JSON validation errors",       test_json_validation_errors),
 
     # Category 2 — GIL stress
     ("[GIL] GIL callback single-thread",    test_gil_callback_real_work_single_thread),

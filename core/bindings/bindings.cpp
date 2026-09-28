@@ -98,6 +98,16 @@ static firefly::Problem to_firefly_problem(const SparseProblem& sp) {
     p.col_upper_bounds.resize(nv, firefly::INF);
     p.is_integer.resize(nv, false);
 
+    if (!sp.var_lower_bounds.empty() && (int)sp.var_lower_bounds.size() != nv) {
+        throw std::invalid_argument("var_lower_bounds size does not match num_vars");
+    }
+    if (!sp.var_upper_bounds.empty() && (int)sp.var_upper_bounds.size() != nv) {
+        throw std::invalid_argument("var_upper_bounds size does not match num_vars");
+    }
+    if (!sp.is_integer.empty() && (int)sp.is_integer.size() != nv) {
+        throw std::invalid_argument("is_integer size does not match num_vars");
+    }
+
     for (int j = 0; j < nv; ++j) {
         p.col_names[j] = "x" + std::to_string(j);
         p.col_to_index[p.col_names[j]] = j;
@@ -107,6 +117,13 @@ static firefly::Problem to_firefly_problem(const SparseProblem& sp) {
     }
 
     // Row metadata: senses and bounds derived from RHS
+    if ((int)sp.row_senses.size() != nc) {
+        throw std::invalid_argument("row_senses size does not match num_constrs");
+    }
+    if ((int)sp.rhs.size() != nc) {
+        throw std::invalid_argument("rhs size does not match num_constrs");
+    }
+
     p.row_names.resize(nc);
     p.row_senses.resize(nc, 'L');
     p.row_lower_bounds.resize(nc, -firefly::INF);
@@ -116,8 +133,8 @@ static firefly::Problem to_firefly_problem(const SparseProblem& sp) {
         p.row_names[i] = "c" + std::to_string(i);
         p.row_to_index[p.row_names[i]] = i;
 
-        char sense = (i < (int)sp.row_senses.size()) ? sp.row_senses[i] : 'L';
-        double rhs  = (i < (int)sp.rhs.size())        ? sp.rhs[i]        : 0.0;
+        char sense = sp.row_senses[i];
+        double rhs  = sp.rhs[i];
         p.row_senses[i] = sense;
 
         // Convert sense + rhs to explicit bounds used by Presolver
@@ -134,10 +151,12 @@ static firefly::Problem to_firefly_problem(const SparseProblem& sp) {
                 p.row_lower_bounds[i] = rhs;
                 p.row_upper_bounds[i] = rhs;
                 break;
-            default:   // 'N' — free row (objective); set no bound
+            case 'N':  // free row (objective); set no bound
                 p.row_lower_bounds[i] = -firefly::INF;
                 p.row_upper_bounds[i] =  firefly::INF;
                 break;
+            default:
+                throw std::invalid_argument(std::string("Unknown row sense: ") + sense);
         }
     }
 

@@ -21,7 +21,7 @@ async def test_concurrent_solve_requests():
     prob1 = {
         "num_vars": 2,
         "num_constrs": 1,
-        "obj_coeffs": [1.0, 1.0],
+        "obj_coeffs": [-1.0, -1.0],
         "row_ptr": [0, 2],
         "col_idx": [0, 1],
         "values": [1.0, 1.0],
@@ -33,7 +33,7 @@ async def test_concurrent_solve_requests():
     prob2 = {
         "num_vars": 2,
         "num_constrs": 1,
-        "obj_coeffs": [2.0, 2.0],
+        "obj_coeffs": [-2.0, -2.0],
         "row_ptr": [0, 2],
         "col_idx": [0, 1],
         "values": [1.0, 1.0],
@@ -143,7 +143,7 @@ async def test_mock_fallback_on_solver_break():
         prob = {
             "num_vars": 2,
             "num_constrs": 1,
-            "obj_coeffs": [1.0, 1.0],
+            "obj_coeffs": [-1.0, -1.0],
             "row_ptr": [0, 2],
             "col_idx": [0, 1],
             "values": [1.0, 1.0],

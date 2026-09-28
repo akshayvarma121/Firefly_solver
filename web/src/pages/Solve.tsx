@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSolver } from '@/context/SolverContext';
 import { GPULaneIndicators } from '@/components/SolverStatus';
 import { Play, Square, Upload, FileText } from 'lucide-react';
@@ -7,22 +7,39 @@ import { toast } from 'sonner';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import { motion, AnimatePresence } from 'framer-motion';
+import { itemVariants } from '@/lib/motion';
+
+type TraceEvent = {
+  stage: string;
+  narration: string;
+  [key: string]: any;
+};
 
 type WSMessage = {
-  type: 'status' | 'trace' | 'data';
+  type: 'status' | 'trace' | 'data' | 'error';
   content?: string;
+  stage?: string;
+  narration?: string;
   data?: { iteration: number; primal: number; dual: number };
   state?: 'idle' | 'solving' | 'converged' | 'error';
+  message?: string;
+  [key: string]: any;
 };
 
 const SAMPLES = ['afiro.mps', 'flugpl.mps', 'egout.mps', 'blend.mps'];
 
 export function Solve() {
-  const { state, setState } = useSolver();
+  const { state, setState, backendMode } = useSolver();
   const [data, setData] = useState<any[]>([]);
-  const [traces, setTraces] = useState<string[]>([]);
+  const [traces, setTraces] = useState<TraceEvent[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  
+  const [metadata, setMetadata] = useState<{vars: number, constrs: number, nonzeros: number, obj?: string} | null>(null);
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+  const [finalObjective, setFinalObjective] = useState<string | null>(null);
   
   const ws = useRef<WebSocket | null>(null);
   const traceEndRef = useRef<HTMLDivElement>(null);
@@ -31,13 +48,60 @@ export function Solve() {
     traceEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [traces]);
 
+  const [uploadedMpsContent, setUploadedMpsContent] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUploadChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const content = evt.target?.result as string;
+      setUploadedMpsContent(content);
+      setSelectedFile(file.name);
+      setState('idle');
+      setData([]);
+      setTraces([]);
+      setFinalObjective(null);
+      loadMetadata(file.name, content);
+    };
+    reader.readAsText(file);
+  };
+
+  const loadMetadata = async (file: string, mpsContent: string | null) => {
+    setInspectLoading(true);
+    setInspectError(null);
+    setMetadata(null);
+    setFinalObjective(null);
+    try {
+      const port = window.__FIREFLY_API_PORT__ || 8000;
+      const res = await fetch(`http://localhost:${port}/inspect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mpsContent ? { mps_content: mpsContent } : { filename: file })
+      });
+      if (!res.ok) throw new Error('Solver core unavailable or parsing failed.');
+      const d = await res.json();
+      const nonzerosMatch = d.problem_summary.match(/(\d+) nonzeros/);
+      setMetadata({
+        vars: d.vars,
+        constrs: d.constrs,
+        nonzeros: nonzerosMatch ? parseInt(nonzerosMatch[1]) : 0
+      });
+    } catch (e: any) {
+      setInspectError(e.message || 'Inspection failed.');
+    } finally {
+      setInspectLoading(false);
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (ws.current) ws.current.close();
     };
   }, []);
 
-  const handleConnect = () => {
+  const handleConnect = useCallback(() => {
     if (!selectedFile) {
       toast.error('Please select or upload a model first.');
       return;
@@ -52,16 +116,25 @@ export function Solve() {
     setIsConnecting(true);
     setState('idle');
     setData([]);
-    setTraces(['Initializing CUDA context...', `Loading ${selectedFile}...`]);
+    setFinalObjective(null);
+    setTraces([
+      { stage: 'system', narration: 'Initializing CUDA context...' },
+      { stage: 'system', narration: `Loading ${selectedFile}...` }
+    ]);
 
     try {
-      ws.current = new WebSocket('ws://localhost:8000/ws/solve-stream');
+      const port = window.__FIREFLY_API_PORT__ || 8000;
+      ws.current = new WebSocket(`ws://localhost:${port}/ws/solve-stream`);
       
       ws.current.onopen = () => {
         setIsConnecting(false);
         setState('solving');
         toast.success('Connected to solver engine.');
-        ws.current?.send(JSON.stringify({ action: 'start', filename: selectedFile }));
+        if (uploadedMpsContent) {
+          ws.current?.send(JSON.stringify({ action: 'start', mps_content: uploadedMpsContent, gpu: backendMode === 'GPU' }));
+        } else {
+          ws.current?.send(JSON.stringify({ action: 'start', filename: selectedFile, gpu: backendMode === 'GPU' }));
+        }
       };
 
       ws.current.onmessage = (event) => {
@@ -72,8 +145,10 @@ export function Solve() {
             if (msg.state === 'converged') toast.success('Solve converged optimally.');
             if (msg.state === 'error') toast.error('Solver encountered an error.');
           }
-          if (msg.type === 'trace' && msg.content) {
-            setTraces(prev => [...prev, msg.content!]);
+          if (msg.type === 'trace' && msg.narration) {
+            setTraces(prev => [...prev, { stage: msg.stage || 'unknown', narration: msg.narration!, ...msg }]);
+            const match = msg.narration!.match(/objective\s+([-\d.eE]+)/i);
+            if (match) setFinalObjective(match[1]);
           }
           if (msg.type === 'data' && msg.data) {
             setData(prev => [...prev, msg.data]);
@@ -81,20 +156,17 @@ export function Solve() {
           if (msg.type === 'error') {
             setState('error');
             toast.error(`Solver error: ${msg.message || 'Unknown'}`);
-            setTraces(prev => [...prev, `ERROR: ${msg.message}`]);
+            setTraces(prev => [...prev, { stage: 'error', narration: `ERROR: ${msg.message}` }]);
           }
         } catch (e) {
-          console.error("Failed to parse WS message", e);
+          // Silent catch in production
         }
       };
 
       ws.current.onerror = () => {
         setIsConnecting(false);
         setState('error');
-        toast.error('WebSocket connection failed. Ensure backend is running at :8000');
-        
-        // Fallback for UI demonstration if backend isn't actually running
-        simulateSolve();
+        toast.error('WebSocket connection failed. Ensure backend is running.');
       };
 
       ws.current.onclose = () => {
@@ -104,44 +176,48 @@ export function Solve() {
       toast.error('Failed to initialize WebSocket.');
       setIsConnecting(false);
     }
-  };
+  }, [selectedFile, state, backendMode, uploadedMpsContent, setState]);
 
-  // Fallback simulator to show the UI working even if backend is offline
-  const simulateSolve = () => {
-    toast.info('Simulating solve for demonstration...');
-    setState('solving');
-    let step = 0;
-    const interval = setInterval(() => {
-      step++;
-      setData(prev => [...prev, {
-        iteration: step,
-        primal: Math.max(0, 100 - step * 1.5 + Math.random() * 5),
-        dual: Math.min(100, step * 1.8 + Math.random() * 5),
-      }]);
-      
-      if (step % 5 === 0) {
-        setTraces(prev => [...prev, `Iteration ${step}: Primal-Dual gap closing...`]);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (selectedFile && state !== 'solving' && !isConnecting) {
+          e.preventDefault();
+          handleConnect();
+        }
       }
+      if (e.key === 'Escape') {
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleConnect, selectedFile, state, isConnecting]);
 
-      if (step >= 50) {
-        clearInterval(interval);
-        setState('converged');
-        setTraces(prev => [...prev, 'Optimal solution found.']);
-      }
-    }, 100);
-  };
+
 
   return (
     <div className="flex flex-col h-full gap-4">
       {/* Top Controls */}
-      <div className="flex gap-4 items-stretch h-14">
+      <div className="flex gap-4 items-stretch h-12">
         <div className="flex-1 flex items-center border border-border bg-panel px-4 gap-4">
           <div className="flex items-center gap-2">
             <span className="text-xs uppercase text-text-muted font-mono">Input:</span>
             <select 
               className="bg-background border border-border text-sm px-2 py-1 outline-none focus:border-signal font-mono h-8"
               value={selectedFile || ''}
-              onChange={(e) => setSelectedFile(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedFile(val);
+                setUploadedMpsContent(null);
+                setState('idle');
+                setData([]);
+                setTraces([]);
+                setFinalObjective(null);
+                loadMetadata(val, null);
+              }}
               disabled={state === 'solving'}
             >
               <option value="" disabled>Select sample...</option>
@@ -149,8 +225,16 @@ export function Solve() {
             </select>
           </div>
           <div className="w-px h-4 bg-border" />
+          <input 
+            type="file" 
+            accept=".mps" 
+            className="hidden" 
+            ref={fileInputRef} 
+            onChange={handleUploadChange} 
+          />
           <button 
             disabled={state === 'solving'}
+            onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-2 text-xs uppercase font-mono text-text-muted hover:text-text-primary transition-colors h-8 px-2 border border-transparent hover:border-border"
           >
             <Upload className="w-3 h-3" />
@@ -186,28 +270,36 @@ export function Solve() {
         {/* Left: Model Stats (Skeleton / Empty state supported) */}
         <div className="border border-border bg-panel flex flex-col">
           <div className="p-3 border-b border-border text-xs uppercase font-mono text-text-muted">Model Context</div>
-          <div className="p-4 flex-1">
+          <div className="p-4 flex-1 flex flex-col justify-center min-h-48">
             {!selectedFile ? (
-              <div className="h-full flex flex-col items-center justify-center text-text-muted gap-2 opacity-50">
+              <div className="flex flex-col items-center justify-center text-text-muted gap-2 opacity-50">
                 <FileText className="w-8 h-8" />
-                <span className="text-xs uppercase font-mono">No Model Selected</span>
+                <span className="text-xs uppercase font-mono text-center">No Model Selected<br/>Upload or pick a sample</span>
               </div>
-            ) : state === 'idle' && data.length === 0 ? (
-              <div className="space-y-4">
-                {/* Skeletons */}
-                <div className="h-4 bg-border/30 w-3/4 rounded-sm animate-pulse" />
-                <div className="h-4 bg-border/30 w-1/2 rounded-sm animate-pulse" />
-                <div className="h-4 bg-border/30 w-2/3 rounded-sm animate-pulse" />
+            ) : inspectLoading ? (
+              <div className="space-y-4 w-full">
+                <div className="h-4 bg-border/30 w-3/4 animate-pulse" />
+                <div className="h-4 bg-border/30 w-1/2 animate-pulse" />
+                <div className="h-4 bg-border/30 w-2/3 animate-pulse" />
               </div>
-            ) : (
-              <div className="space-y-3 font-mono text-sm">
-                <div className="flex justify-between"><span className="text-text-muted">Rows</span><span>4,096</span></div>
-                <div className="flex justify-between"><span className="text-text-muted">Cols</span><span>12,288</span></div>
-                <div className="flex justify-between"><span className="text-text-muted">NonZeros</span><span>86,016</span></div>
+            ) : inspectError ? (
+              <div className="flex flex-col items-center justify-center text-red-500/80 gap-2 text-center">
+                <span className="text-xs font-mono">{inspectError}</span>
+              </div>
+            ) : metadata ? (
+              <motion.div 
+                initial="initial"
+                animate="animate"
+                variants={itemVariants}
+                className="space-y-3 font-mono text-sm w-full"
+              >
+                <div className="flex justify-between"><span className="text-text-muted">Rows</span><span>{metadata.constrs.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">Cols</span><span>{metadata.vars.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">NonZeros</span><span>{metadata.nonzeros.toLocaleString()}</span></div>
                 <div className="w-full h-px bg-border my-4" />
-                <div className="flex justify-between"><span className="text-text-muted">Objective</span><span className={state === 'converged' ? 'text-signal' : ''}>{state === 'converged' ? '1,204.55' : '---'}</span></div>
-              </div>
-            )}
+                <div className="flex justify-between"><span className="text-text-muted">Objective</span><span className={finalObjective ? 'text-signal' : ''}>{finalObjective || '---'}</span></div>
+              </motion.div>
+            ) : null}
           </div>
         </div>
 
@@ -223,10 +315,14 @@ export function Solve() {
                 <span className="flex items-center gap-1"><div className="w-2 h-2 bg-chart-trace rounded-sm" /> Dual</span>
               </div>
             </div>
-            <div className="flex-1 p-4 min-h-[200px]">
-              {data.length === 0 ? (
-                <div className="h-full border border-dashed border-border flex items-center justify-center text-text-muted text-xs uppercase font-mono">
-                  Awaiting Telemetry
+            <div className="flex-1 p-4 min-h-48 relative">
+              {state === 'error' ? (
+                <div className="absolute inset-0 flex items-center justify-center text-red-500/80 text-xs uppercase font-mono">
+                  Solver Core Offline
+                </div>
+              ) : data.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center text-text-muted text-xs uppercase font-mono">
+                  {state === 'idle' ? 'Awaiting solve initialization...' : 'Awaiting telemetry...'}
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -247,17 +343,61 @@ export function Solve() {
           </div>
 
           {/* Trace Narration */}
-          <div className="flex-1 border border-border bg-panel flex flex-col min-h-[150px]">
+          <div className="flex-1 border border-border bg-panel flex flex-col min-h-40">
             <div className="p-3 border-b border-border text-xs uppercase font-mono text-text-muted">Execution Trace</div>
-            <div className="flex-1 p-3 overflow-y-auto font-mono text-xs text-text-muted space-y-1">
+            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs text-text-muted space-y-1">
               {traces.length === 0 ? (
                 <span className="opacity-50">System idle.</span>
               ) : (
-                traces.map((t, i) => (
-                  <div key={i} className={cn(t.includes('Optimal') ? "text-signal" : t.includes('ERR') ? "text-red-500" : "text-text-primary")}>
-                    &gt; {t}
-                  </div>
-                ))
+                <AnimatePresence initial={false}>
+                  {traces.map((t, i) => (
+                    <motion.div 
+                      key={i}
+                      initial="initial"
+                      animate="animate"
+                      variants={itemVariants}
+                      className={cn(
+                        "flex flex-col gap-1 py-1 border-b border-border/30 last:border-b-0",
+                        t.stage === 'error' && "border-red-500/30"
+                      )}
+                    >
+                      <div className={cn("whitespace-pre-wrap flex gap-3", t.narration.includes('Optimal') ? "text-signal" : t.narration.includes('ERR') ? "text-red-500" : "text-text-primary")}>
+                        <span className="w-16 shrink-0 opacity-50 uppercase tracking-wider">[{t.stage}]</span>
+                        <span>{t.narration}</span>
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-x-6 gap-y-1 text-[10px] text-text-muted font-mono ml-[4.75rem]">
+                        {t.stage === 'parse' && t.vars !== undefined && (
+                          <>
+                            <span>VARS: <span className="text-text-primary">{t.vars}</span></span>
+                            <span>CONSTRS: <span className="text-text-primary">{t.constrs}</span></span>
+                            {t.is_milp !== undefined && <span>MILP: <span className="text-text-primary">{t.is_milp ? 'YES' : 'NO'}</span></span>}
+                            {t.sense && <span>SENSE: <span className="text-text-primary">{t.sense.toUpperCase()}</span></span>}
+                          </>
+                        )}
+                        
+                        {t.stage === 'presolve' && t.original_rows !== undefined && (
+                          <>
+                            <span>REMOVED_ROWS: <span className="text-text-primary">{t.rows_removed}</span></span>
+                            <span>FIXED_VARS: <span className="text-text-primary">{t.variables_fixed}</span></span>
+                            <span>BOUNDS_TIGHTENED: <span className="text-text-primary">{t.bounds_tightened}</span></span>
+                            <span>ORIG_DIM: <span className="text-text-primary">{t.original_rows}x{t.original_cols}</span></span>
+                            <span>NEW_DIM: <span className="text-text-primary">{t.reduced_rows}x{t.reduced_cols}</span></span>
+                          </>
+                        )}
+                        
+                        {t.stage === 'output' && t.status && (
+                          <>
+                            <span>STATUS: <span className={t.status === 'OPTIMAL' ? 'text-signal' : 'text-text-primary'}>{t.status}</span></span>
+                            {t.objective !== undefined && <span>OBJECTIVE: <span className="text-text-primary">{t.objective}</span></span>}
+                            {t.iterations !== undefined && <span>ITERATIONS: <span className="text-text-primary">{t.iterations}</span></span>}
+                            {t.time_ms !== undefined && <span>TIME: <span className="text-text-primary">{Number(t.time_ms).toFixed(2)}ms</span></span>}
+                          </>
+                        )}
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               )}
               {state === 'solving' && <div className="animate-pulse">&gt; _</div>}
               <div ref={traceEndRef} />

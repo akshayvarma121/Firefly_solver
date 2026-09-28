@@ -1,4 +1,6 @@
 import { Database, FileCode2, Cpu, LineChart } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { itemVariants, staggerContainer } from '@/lib/motion';
 
 export function Architecture() {
   const steps = [
@@ -11,7 +13,7 @@ export function Architecture() {
   return (
     <div className="flex flex-col h-full gap-6 max-w-4xl mx-auto items-center justify-center p-4">
       <div className="text-center space-y-2 mb-4">
-        <h2 className="text-lg font-semibold tracking-wider uppercase text-text-primary">Solver Pipeline</h2>
+        <h2 className="text-sm font-semibold tracking-wider uppercase text-text-primary">Solver Pipeline</h2>
         <p className="text-xs font-mono text-text-muted max-w-xl mx-auto">
           Firefly implements an end-to-end mathematical optimization pipeline built from first principles, 
           leveraging CUDA C++20 for massively parallel compute.
@@ -22,9 +24,14 @@ export function Architecture() {
         {/* Connecting line */}
         <div className="absolute top-1/2 left-0 w-full h-px bg-border -translate-y-1/2 hidden md:block" />
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 relative z-10">
+        <motion.div 
+          className="grid grid-cols-1 md:grid-cols-4 gap-4 relative z-10"
+          variants={staggerContainer}
+          initial="initial"
+          animate="animate"
+        >
           {steps.map((step, idx) => (
-            <div key={idx} className="bg-panel border border-border p-5 flex flex-col relative group hover:border-signal transition-colors">
+            <motion.div key={idx} variants={itemVariants} className="bg-panel border border-border p-4 flex flex-col relative group hover:border-signal transition-colors">
               <div className="flex items-start justify-between mb-4">
                 <div className="w-8 h-8 flex items-center justify-center bg-background border border-border text-signal font-mono text-xs">
                   0{step.num}
@@ -33,13 +40,13 @@ export function Architecture() {
                   {step.icon}
                 </div>
               </div>
-              <h3 className="text-sm font-semibold text-text-primary mb-2 tracking-wide">{step.title}</h3>
+              <h3 className="text-xs font-semibold tracking-wider uppercase text-text-primary mb-2">{step.title}</h3>
               <p className="text-xs font-mono text-text-muted leading-relaxed">
                 {step.desc}
               </p>
-            </div>
+            </motion.div>
           ))}
-        </div>
+        </motion.div>
       </div>
     </div>
   );

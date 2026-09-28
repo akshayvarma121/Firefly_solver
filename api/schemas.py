@@ -47,6 +47,7 @@ class BenchmarkResult(BaseModel):
     solver_used: Optional[str] = None
     objective: Optional[float] = None
     reference: Optional[float] = None
+    reference_time_ms: Optional[float] = None
     difference: Optional[float] = None
     passed: Optional[bool] = None
     wall_time_ms: Optional[float] = None

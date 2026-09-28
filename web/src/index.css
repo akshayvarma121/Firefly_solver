@@ -44,4 +44,12 @@
     background-color: var(--background);
     color: var(--text-primary);
   }
+
+  button, a, input, select {
+    @apply outline-none focus:outline-none focus:ring-2 focus:ring-signal focus:ring-offset-0 focus:ring-offset-background transition-colors;
+  }
+  
+  button:active, a:active {
+    @apply bg-border/50;
+  }
 }

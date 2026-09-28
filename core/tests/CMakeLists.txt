@@ -1,4 +1,4 @@
-add_executable(firefly_tests main.cpp test_mps_parser.cpp)
+﻿add_executable(firefly_tests main.cpp test_mps_parser.cpp)
 
 # Link against the core library
 target_link_libraries(firefly_tests PRIVATE firefly_core)
@@ -54,3 +54,6 @@ target_link_libraries(benchmark_gpu PRIVATE firefly_core)
 add_executable(test_branch_and_bound test_branch_and_bound.cpp)
 target_link_libraries(test_branch_and_bound PRIVATE firefly_core)
 add_test(NAME test_branch_and_bound COMMAND test_branch_and_bound)
+
+add_executable(test_repro test_repro.cpp)
+target_link_libraries(test_repro PRIVATE firefly_core)

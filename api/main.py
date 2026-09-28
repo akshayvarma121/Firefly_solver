@@ -9,13 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 
-try:
-    import firefly_solver
-    FIREFLY_SOLVER_AVAILABLE = True
-except Exception as e:
-    FIREFLY_SOLVER_AVAILABLE = False
-    print(f"[WARNING] firefly_solver import failed: {e}. Fallback mock mode enabled.", file=sys.stderr)
-
 from config import settings
 from schemas import (
     SolveRequest, SolveResponse, ProblemDef, 
@@ -24,6 +17,33 @@ from schemas import (
     InspectResponse
 )
 
+if os.name == "nt":
+    cuda_path = os.environ.get("CUDA_PATH", "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2")
+    if cuda_path:
+        _cuda_bin = os.path.join(cuda_path, "bin", "x64")
+        if os.path.isdir(_cuda_bin):
+            os.add_dll_directory(_cuda_bin)
+        _cuda_bin2 = os.path.join(cuda_path, "bin")
+        if os.path.isdir(_cuda_bin2):
+            os.add_dll_directory(_cuda_bin2)
+
+core_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "core")
+if core_path not in sys.path:
+    sys.path.insert(0, core_path)
+
+try:
+    import firefly_solver
+    FIREFLY_SOLVER_AVAILABLE = True
+except Exception as e:
+    FIREFLY_SOLVER_AVAILABLE = False
+    print(f"[WARNING] firefly_solver import failed: {e}. Fallback mock mode enabled.", file=sys.stderr)
+
+def get_base_path():
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 import narration
 from trace import build_trace_from_prob
 
@@ -31,11 +51,6 @@ from trace import build_trace_from_prob
 import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "core"))
 from cli.bench import run_batch as _run_batch  # type: ignore
-
-_BENCHMARK_REFERENCES = {
-    "test_problem1.mps": -10.0,
-    "test_problem2.mps": -12.0,
-}
 
 # ---------------------------------------------------------------------------
 # Logging Setup
@@ -63,65 +78,37 @@ def health_check():
         mode = "CPU (Fallback)"
     return {"status": "ok", "mode": mode, "solver_available": FIREFLY_SOLVER_AVAILABLE}
 
-@app.post("/inspect", response_model=InspectResponse)
-async def inspect_endpoint(
-    request: Request,
-    file: UploadFile = File(None),
-    problem_def: str = Form(None)
-):
+
+@app.post("/inspect", response_model=InspectResponse, response_model_exclude_none=True)
+async def inspect_endpoint(req: SolveRequest):
     try:
         if not FIREFLY_SOLVER_AVAILABLE:
             raise ImportError("firefly_solver module is not available")
 
-        prob = None
-
-        if file:
-            content = await file.read()
-            if len(content) > settings.MAX_UPLOAD_SIZE_BYTES:
-                raise ValueError(f"File exceeds maximum upload size of {settings.MAX_UPLOAD_SIZE_BYTES} bytes")
-            prob = firefly_solver.parse_mps_string(content.decode("utf-8"))
-        elif problem_def:
-            data = json.loads(problem_def)
-            pdef = ProblemDef(**data)
-            prob = firefly_solver.SparseProblem()
-            prob.num_vars = pdef.num_vars
-            prob.num_constrs = pdef.num_constrs
-            prob.obj_coeffs = pdef.obj_coeffs
-            prob.row_ptr = pdef.row_ptr
-            prob.col_idx = pdef.col_idx
-            prob.values = pdef.values
-            prob.row_senses = list(pdef.row_senses)
-            prob.rhs = pdef.rhs
-            if pdef.var_lower_bounds: prob.var_lower_bounds = pdef.var_lower_bounds
-            if pdef.var_upper_bounds: prob.var_upper_bounds = pdef.var_upper_bounds
-            if pdef.is_integer: prob.is_integer = pdef.is_integer
+        if req.mps_content:
+            prob = firefly_solver.parse_mps_string(req.mps_content)
+        elif getattr(req, 'filename', None):
+            sample_path = os.path.join(get_base_path(), "sample_problems", req.filename)
+            if not os.path.isfile(sample_path):
+                raise HTTPException(status_code=404, detail=f"Sample not found: {req.filename}")
+            with open(sample_path, "r", encoding="utf-8") as f:
+                prob = firefly_solver.parse_mps_string(f.read())
         else:
-            raise ValueError("Must provide either file or problem_def")
-
-        if not FIREFLY_SOLVER_AVAILABLE:
-            raise ImportError("firefly_solver module is not available")
-
+            raise HTTPException(status_code=400, detail="Must provide mps_content or filename")
+            
         is_milp = any(prob.is_integer) if hasattr(prob, 'is_integer') and prob.is_integer else False
-        parse_data = {
-            "vars": prob.num_vars,
-            "constrs": prob.num_constrs,
-            "is_milp": is_milp,
-            "sense": "minimize"
-        }
-        summary = narration.describe_parse(parse_data)
-        
         return InspectResponse(
             vars=prob.num_vars,
             constrs=prob.num_constrs,
             is_milp=is_milp,
             sense="minimize",
-            problem_summary=summary
+            problem_summary=f"{prob.num_vars} vars, {prob.num_constrs} constrs, {len(prob.values)} nonzeros"
         )
-
-    except (ValueError, json.JSONDecodeError, ValidationError, RuntimeError) as e:
-        logger.warning(f"Input validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Inspect failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/solve", response_model=SolveResponse, response_model_exclude_none=True)
 async def solve_endpoint(
@@ -208,8 +195,8 @@ async def solve_endpoint(
         )
 
 @app.get("/benchmark", response_model=BenchmarkResponse, response_model_exclude_none=True)
-async def benchmark_endpoint():
-    sample_dir = os.path.join(os.path.dirname(__file__), "sample_problems")
+async def benchmark_endpoint(gpu: bool = True):
+    sample_dir = os.path.join(get_base_path(), "sample_problems")
     if not os.path.isdir(sample_dir):
         return BenchmarkResponse(benchmark_results=[])
 
@@ -218,8 +205,7 @@ async def benchmark_endpoint():
             _run_batch,
             sample_dir,
             method="auto",
-            gpu=True,
-            references=_BENCHMARK_REFERENCES,
+            gpu=gpu,
             firefly_solver=firefly_solver,
         )
 
@@ -231,6 +217,7 @@ async def benchmark_endpoint():
                 solver_used=getattr(pr, "solver_used", None),
                 objective=pr.objective,
                 reference=pr.reference,
+                reference_time_ms=getattr(pr, "reference_time_ms", None),
                 difference=pr.difference,
                 passed=pr.passed,
                 wall_time_ms=pr.wall_time_ms,
@@ -276,7 +263,7 @@ async def websocket_solve(websocket: WebSocket):
             if solve_req.mps_content:
                 prob = firefly_solver.parse_mps_string(solve_req.mps_content)
             elif getattr(solve_req, 'filename', None):
-                sample_path = os.path.join(os.path.dirname(__file__), "sample_problems", solve_req.filename)
+                sample_path = os.path.join(get_base_path(), "sample_problems", solve_req.filename)
                 if not os.path.isfile(sample_path):
                     raise ValueError(f"Sample not found: {solve_req.filename}")
                 with open(sample_path, "r", encoding="utf-8") as f:
@@ -303,15 +290,23 @@ async def websocket_solve(websocket: WebSocket):
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
+        # Generate initial parse trace
+        if prob:
+            is_milp = any(prob.is_integer) if hasattr(prob, 'is_integer') and prob.is_integer else False
+            parse_data = {"stage": "parse", "vars": prob.num_vars, "constrs": prob.num_constrs, "is_milp": is_milp, "sense": "minimize"}
+            parse_data["narration"] = narration.describe_parse(parse_data)
+            await websocket.send_json({"type": "trace", **parse_data})
+
         def iteration_callback(iteration, primal_obj, dual_obj, elapsed_ms, mock=False):
             asyncio.run_coroutine_threadsafe(
-                queue.put(StreamUpdate(
-                    iteration=iteration,
-                    primal_obj=primal_obj,
-                    dual_obj=dual_obj,
-                    elapsed_ms=elapsed_ms,
-                    mock=mock if mock else None
-                )),
+                queue.put({
+                    "type": "data",
+                    "data": {
+                        "iteration": int(iteration),
+                        "primal": float(primal_obj),
+                        "dual": float(dual_obj)
+                    }
+                }),
                 loop
             )
 
@@ -340,29 +335,46 @@ async def websocket_solve(websocket: WebSocket):
             while not solve_future.done():
                 try:
                     update = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    await websocket.send_json(update.model_dump(exclude_none=True))
+                    await websocket.send_json(update)
                 except asyncio.TimeoutError:
                     continue
             
             # flush
             while not queue.empty():
                 update = queue.get_nowait()
-                await websocket.send_json(update.model_dump(exclude_none=True))
+                await websocket.send_json(update)
 
         # Enforce overall solve timeout on the stream too
         await asyncio.wait_for(pump_queue(), timeout=settings.SOLVE_TIMEOUT_SECONDS)
         
         res = solve_future.result()
         is_mock = getattr(res, '__class__', None).__name__ == 'MockRes'
-        await websocket.send_json(StreamResult(
-            status=res.status,
-            solver_used=getattr(res, "solver_used", None),
-            objective=res.objective,
-            solution=res.solution,
-            wall_time_ms=res.wall_time_ms,
-            iterations=res.iterations,
-            mock=is_mock if is_mock else None
-        ).model_dump(exclude_none=True))
+        
+        if hasattr(res, 'presolve_stats'):
+            ps = res.presolve_stats
+            pdata = {"stage": "presolve", "original_rows": ps.original_rows, "original_cols": ps.original_cols, "reduced_rows": ps.reduced_rows, "reduced_cols": ps.reduced_cols, "rows_removed": ps.rows_removed, "bounds_tightened": ps.bounds_tightened, "variables_fixed": ps.variables_fixed, "scaling_applied": ps.scaling_applied}
+            pdata["narration"] = narration.describe_presolve(pdata)
+            await websocket.send_json({"type": "trace", **pdata})
+        else:
+            pdata = {"stage": "presolve", "message": "PresolveStats not available"}
+            pdata["narration"] = narration.describe_presolve(pdata)
+            await websocket.send_json({"type": "trace", **pdata})
+
+        is_milp_flag = any(prob.is_integer) if prob and hasattr(prob, 'is_integer') and prob.is_integer else False
+        if is_milp_flag:
+            milp_data = {"stage": "milp", "message": "Branch-and-bound exploration completed."}
+            milp_data["narration"] = narration.describe_milp(milp_data)
+            await websocket.send_json({"type": "trace", **milp_data})
+        else:
+            lp_core_data = {"stage": "lp_core", "message": f"Final LP iterations: {res.iterations}"}
+            lp_core_data["narration"] = narration.describe_lp_core(lp_core_data)
+            await websocket.send_json({"type": "trace", **lp_core_data})
+            
+        odata = {"stage": "output", "status": res.status, "objective": res.objective, "iterations": res.iterations, "time_ms": res.wall_time_ms}
+        odata["narration"] = narration.describe_output(odata)
+        await websocket.send_json({"type": "trace", **odata})
+
+        await websocket.send_json({"type": "status", "state": "converged" if res.status == "OPTIMAL" else "error"})
 
     except asyncio.TimeoutError:
         if solve_future:
@@ -377,8 +389,9 @@ async def websocket_solve(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.environ.get("FIREFLY_API_PORT", 8000))
     is_frozen = getattr(sys, 'frozen', False)
     if is_frozen:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
