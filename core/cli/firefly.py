@@ -167,6 +167,13 @@ def _print_summary(result, filepath: str, quiet: bool, verbose: bool) -> None:
         print(f"  {Theme.MUTED}Objective :{Theme.RESET} {Theme.SECOND}{result.objective:.10g}{Theme.RESET}")
     print(f"  {Theme.MUTED}Time      :{Theme.RESET} {Theme.PRIMARY}{result.wall_time_ms:.1f} ms{Theme.RESET}")
     print(f"  {Theme.MUTED}Iterations:{Theme.RESET} {Theme.PRIMARY}{result.iterations}{Theme.RESET}")
+    
+    if hasattr(result, "solution") and result.solution:
+        print(f"  {Theme.MUTED}Solution  :{Theme.RESET}")
+        for i, val in enumerate(result.solution):
+            if abs(val) > 1e-7:
+                print(f"    {Theme.PRIMARY}x{i:<6}{Theme.RESET} = {Theme.SECOND}{val:.6g}{Theme.RESET}")
+
     print()
 
 
@@ -1054,19 +1061,11 @@ def main() -> None:
                 except (EOFError, KeyboardInterrupt):
                     pass
             sys.exit(0)
-        else:
-            _print_homepage()
-            sys.exit(0)
-
 
     args = parser.parse_args()
 
     quiet = getattr(args, "quiet", False)
     
-    # Print the logo for normal CLI runs — skip for home/help since _print_homepage already prints it
-    if not quiet and len(sys.argv) > 1 and not interactive_mode and args.command not in ["home", "help"]:
-        _print_firefly_logo()
-
     # Warn if the native solver is unavailable (unless --quiet)
     if not _FS_AVAILABLE and not quiet:
         print(
