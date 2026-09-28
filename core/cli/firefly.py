@@ -165,6 +165,8 @@ def _print_summary(result, filepath: str, quiet: bool, verbose: bool) -> None:
         print(f"  {Theme.MUTED}Error     :{Theme.RESET} {Theme.ERROR}{result.error_message}{Theme.RESET}")
     if result.objective is not None:
         print(f"  {Theme.MUTED}Objective :{Theme.RESET} {Theme.SECOND}{result.objective:.10g}{Theme.RESET}")
+    if getattr(result, "primal_dual_gap", None) is not None:
+        print(f"  {Theme.MUTED}PD Gap    :{Theme.RESET} {Theme.PRIMARY}{result.primal_dual_gap:.2e}{Theme.RESET}")
     print(f"  {Theme.MUTED}Time      :{Theme.RESET} {Theme.PRIMARY}{result.wall_time_ms:.1f} ms{Theme.RESET}")
     print(f"  {Theme.MUTED}Iterations:{Theme.RESET} {Theme.PRIMARY}{result.iterations}{Theme.RESET}")
     

@@ -36,6 +36,7 @@ class ProblemResult:
     error_message: Optional[str] = None
     mock: bool = False
     solution: Optional[List[float]] = None
+    primal_dual_gap: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -155,6 +156,8 @@ def solve_one(
             result.solution = list(res.solution)
         else:
             result.solution = []
+        if hasattr(res, "primal_dual_gap"):
+            result.primal_dual_gap = res.primal_dual_gap
 
         result.reference = ref_obj
         result.reference_time_ms = ref_time
